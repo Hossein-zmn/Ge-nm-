@@ -1,0 +1,256 @@
+import os
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from pathlib import Path
+
+# ------------------------------
+# 1) تنظیمات اولیه
+# ------------------------------
+os.makedirs("output", exist_ok=True)
+
+# نام فایل‌های CSV و نام نمایش داده‌شده در نمودار
+samples = {
+    "Gelatin": "gelatin.csv",
+    "Sodium alginate/PVA": "alginate.csv",
+    "Chitosan/PVA": "chitosan.csv",
+    "TPU": "tpu.csv",
+}
+
+# اگر داده‌های ImageJ بر حسب نانومتر هستند: "nm"
+# اگر داده‌ها بر حسب میکرومتر هستند: "um"
+input_unit = "nm"
+
+# عرض هر بازه هیستوگرام، بر حسب نانومتر
+bin_width = 20
+
+# رنگ اختصاصی هر نمونه
+colors = {
+    "Gelatin": "#4C97C7",
+    "Sodium alginate/PVA": "#4CB391",
+    "Chitosan/PVA": "#E6A84D",
+    "TPU": "#8B5CC7",
+}
+
+# تنظیمات ظاهری نمودار
+plt.rcParams.update({
+    "font.family": "DejaVu Sans",
+    "font.size": 11,
+    "axes.linewidth": 1.2,
+    "axes.labelweight": "bold",
+    "axes.titleweight": "bold",
+})
+
+# ------------------------------
+# 2) خواندن و آماده‌سازی داده‌ها
+# ------------------------------
+all_data = {}
+summary_rows = []
+
+for sample_name, file_name in samples.items():
+    file_path = Path(file_name)
+
+    if not file_path.exists():
+        print(f"فایل پیدا نشد: {file_name}")
+        continue
+
+    df = pd.read_csv(file_path)
+
+    if "Length" not in df.columns:
+        raise ValueError(
+            f"در فایل {file_name} ستون Length وجود ندارد. "
+            "ستون قطر الیاف را به Length تغییر نام دهید."
+        )
+
+    diameters = pd.to_numeric(df["Length"], errors="coerce").dropna().to_numpy()
+
+    if len(diameters) == 0:
+        raise ValueError(f"داده معتبر در ستون Length فایل {file_name} یافت نشد.")
+
+    # تبدیل همه مقادیر به نانومتر
+    if input_unit == "um":
+        diameters_nm = diameters * 1000
+    elif input_unit == "nm":
+        diameters_nm = diameters
+    else:
+        raise ValueError("input_unit باید فقط nm یا um باشد.")
+
+    all_data[sample_name] = diameters_nm
+
+    summary_rows.append({
+        "Sample": sample_name,
+        "n": len(diameters_nm),
+        "Mean (nm)": np.mean(diameters_nm),
+        "SD (nm)": np.std(diameters_nm, ddof=1),
+        "Median (nm)": np.median(diameters_nm),
+        "Min (nm)": np.min(diameters_nm),
+        "Max (nm)": np.max(diameters_nm),
+        "CV (%)": np.std(diameters_nm, ddof=1) / np.mean(diameters_nm) * 100,
+    })
+
+summary_df = pd.DataFrame(summary_rows)
+
+# ذخیره جدول آماری
+summary_df.to_excel("output/fiber_diameter_summary.xlsx", index=False)
+
+print(summary_df.round(2))
+
+# ------------------------------
+# 3) تعریف بازه مشترک برای همه نمودارها
+# ------------------------------
+all_values = np.concatenate(list(all_data.values()))
+
+xmin = np.floor(all_values.min() / bin_width) * bin_width
+xmax = np.ceil(all_values.max() / bin_width) * bin_width
+
+# یک بازه اضافه برای جلوگیری از حذف داده انتهایی
+bins = np.arange(xmin, xmax + bin_width, bin_width)
+
+# ------------------------------
+# 4) رسم نمودار جداگانه برای هر نمونه
+# ------------------------------
+for sample_name, values in all_data.items():
+    mean_value = np.mean(values)
+    sd_value = np.std(values, ddof=1)
+
+    fig, ax = plt.subplots(figsize=(7.5, 5.2), dpi=300)
+
+    ax.hist(
+        values,
+        bins=bins,
+        color=colors[sample_name],
+        edgecolor="#1F2D3D",
+        linewidth=1.1,
+        rwidth=0.96
+    )
+
+    ax.axvline(
+        mean_value,
+        color="#C0392B",
+        linestyle="--",
+        linewidth=1.8,
+        label=f"Mean = {mean_value:.1f} nm"
+    )
+
+    ax.set_title(f"Fiber diameter distribution: {sample_name}")
+    ax.set_xlabel("Fiber diameter (nm)")
+    ax.set_ylabel("Frequency")
+    ax.set_xlim(xmin, xmax)
+    ax.set_xticks(bins)
+    ax.grid(axis="y", linestyle="--", alpha=0.4)
+
+    stats_text = (
+        f"n = {len(values)}\n"
+        f"Mean ± SD = {mean_value:.1f} ± {sd_value:.1f} nm\n"
+        f"CV = {(sd_value / mean_value * 100):.1f}%"
+    )
+
+    ax.text(
+        0.97, 0.95,
+        stats_text,
+        transform=ax.transAxes,
+        ha="right",
+        va="top",
+        fontsize=10.5,
+        bbox=dict(
+            boxstyle="round,pad=0.4",
+            facecolor="white",
+            edgecolor="#AAB7C4",
+            alpha=0.95
+        )
+    )
+
+    ax.legend(frameon=False, loc="upper left")
+    fig.tight_layout()
+
+    safe_name = sample_name.replace("/", "_").replace(" ", "_")
+    fig.savefig(
+        f"output/histogram_{safe_name}.png",
+        dpi=600,
+        bbox_inches="tight"
+    )
+
+    fig.savefig(
+        f"output/histogram_{safe_name}.tiff",
+        dpi=600,
+        bbox_inches="tight"
+    )
+
+    plt.close(fig)
+
+# ------------------------------
+# 5) رسم نمودار چهارقسمتی مقایسه‌ای
+# ------------------------------
+fig, axes = plt.subplots(2, 2, figsize=(12, 8.5), dpi=300)
+axes = axes.flatten()
+
+for ax, (sample_name, values) in zip(axes, all_data.items()):
+    mean_value = np.mean(values)
+    sd_value = np.std(values, ddof=1)
+
+    ax.hist(
+        values,
+        bins=bins,
+        color=colors[sample_name],
+        edgecolor="#1F2D3D",
+        linewidth=1.0,
+        rwidth=0.96
+    )
+
+    ax.axvline(
+        mean_value,
+        color="#C0392B",
+        linestyle="--",
+        linewidth=1.6
+    )
+
+    ax.set_title(sample_name, fontsize=12)
+    ax.set_xlabel("Fiber diameter (nm)")
+    ax.set_ylabel("Frequency")
+    ax.set_xlim(xmin, xmax)
+    ax.set_xticks(bins)
+    ax.grid(axis="y", linestyle="--", alpha=0.35)
+
+    ax.text(
+        0.97, 0.95,
+        f"n = {len(values)}\n"
+        f"Mean ± SD = {mean_value:.1f} ± {sd_value:.1f} nm",
+        transform=ax.transAxes,
+        ha="right",
+        va="top",
+        fontsize=9.5,
+        bbox=dict(
+            boxstyle="round,pad=0.3",
+            facecolor="white",
+            edgecolor="#AAB7C4"
+        )
+    )
+
+# حذف قاب‌های اضافی در صورت کم بودن تعداد نمونه‌ها
+for ax in axes[len(all_data):]:
+    ax.axis("off")
+
+fig.suptitle(
+    "Comparison of electrospun nanofiber diameter distributions",
+    fontsize=15,
+    fontweight="bold",
+    y=1.02
+)
+
+fig.tight_layout()
+
+fig.savefig(
+    "output/all_samples_fiber_diameter_histograms.png",
+    dpi=600,
+    bbox_inches="tight"
+)
+
+fig.savefig(
+    "output/all_samples_fiber_diameter_histograms.tiff",
+    dpi=600,
+    bbox_inches="tight"
+)
+
+plt.close(fig)
+
+print("نمودارها و جدول آماری با موفقیت در پوشه output ذخیره شدند.")
